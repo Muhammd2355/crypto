@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"github.com/go-crypto/crypto"
-	"github.com/go-crypto/crypto/eddsa"
+	"github.com/go-crypto/crypto/ed25519"
 )
 
 func main() {
@@ -65,23 +65,23 @@ func main() {
 		fmt.Println(" ERROR: Should have rejected invalid signature")
 	}
 
-	// Demonstrate direct eddsa package usage (lower level)
-	fmt.Printf("\n--- Direct EdDSA Package Usage ---\n")
-	
+	// Demonstrate direct ed25519 package usage (lower level)
+	fmt.Printf("\n--- Direct Ed25519 Package Usage ---\n")
+
 	// Generate key pair using direct package
-	directPriv, directPub, err := eddsa.GenerateKey()
+	directPriv, directPub, err := ed25519.GenerateKey()
 	if err != nil {
 		log.Fatalf("Failed to generate direct EdDSA key pair: %v", err)
 	}
 
-	// Sign using direct package
-	directSig, err := eddsa.SignMessage(directPriv, message)
+	// Sign message using direct package
+	directSig, err := ed25519.SignMessage(directPriv, message)
 	if err != nil {
 		log.Fatalf("Failed to sign with direct package: %v", err)
 	}
 
 	// Verify using direct package
-	directValid := eddsa.VerifyMessage(directPub, message, directSig)
+	directValid := ed25519.VerifyMessage(directPub, message, directSig)
 	
 	fmt.Printf("Direct package verification: ")
 	if directValid {
@@ -92,11 +92,11 @@ func main() {
 
 	// Show curve information
 	fmt.Printf("\n--- Curve Information ---\n")
-	g := eddsa.BasePoint()
+	g := ed25519.BasePoint()
 	fmt.Printf("Generator point X: %s\n", g.X.Text(16))
 	fmt.Printf("Generator point Y: %s\n", g.Y.Text(16))
-	fmt.Printf("Curve prime P: %s\n", eddsa.P.Text(16))
-	fmt.Printf("Curve order L: %s\n", eddsa.L.Text(16))
+	fmt.Printf("Curve prime P: %s\n", ed25519.P.Text(16))
+	fmt.Printf("Curve order L: %s\n", ed25519.L.Text(16))
 	
 	// Verify generator is on curve
 	if g.IsOnCurve() {

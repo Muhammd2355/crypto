@@ -1,4 +1,4 @@
-package eddsa
+package ed25519
 
 import (
 	"encoding/hex"

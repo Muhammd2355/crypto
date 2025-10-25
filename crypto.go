@@ -5,7 +5,7 @@ package crypto
 import (
 	"errors"
 	"github.com/go-crypto/crypto/aes"
-	"github.com/go-crypto/crypto/eddsa"
+	"github.com/go-crypto/crypto/ed25519"
 	"github.com/go-crypto/crypto/evp"
 	"github.com/go-crypto/crypto/internal"
 	"github.com/go-crypto/crypto/keystore"
@@ -48,17 +48,17 @@ type PublicKey struct {
 
 // EdDSAPrivateKey represents an EdDSA private key
 type EdDSAPrivateKey struct {
-	*eddsa.PrivateKey
+	*ed25519.PrivateKey
 }
 
 // EdDSAPublicKey represents an EdDSA public key
 type EdDSAPublicKey struct {
-	*eddsa.PublicKey
+	*ed25519.PublicKey
 }
 
 // EdDSASignature represents an EdDSA signature
 type EdDSASignature struct {
-	*eddsa.Signature
+	*ed25519.Signature
 }
 
 // PrivateKey represents an RSA private key
@@ -350,7 +350,7 @@ func RandomBytes(n int) ([]byte, error) {
 
 // GenerateEdDSAKeyPair generates a new EdDSA key pair
 func GenerateEdDSAKeyPair() (*EdDSAPrivateKey, *EdDSAPublicKey, error) {
-	priv, pub, err := eddsa.GenerateKey()
+	priv, pub, err := ed25519.GenerateKey()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -370,7 +370,7 @@ func (priv *EdDSAPrivateKey) SignEdDSA(message []byte) (*EdDSASignature, error) 
 
 // SignEdDSAMessage creates an EdDSA signature for a string message
 func (priv *EdDSAPrivateKey) SignEdDSAMessage(message string) (*EdDSASignature, error) {
-	sig, err := eddsa.SignMessage(priv.PrivateKey, message)
+	sig, err := ed25519.SignMessage(priv.PrivateKey, message)
 	if err != nil {
 		return nil, err
 	}
@@ -385,5 +385,5 @@ func (pub *EdDSAPublicKey) VerifyEdDSA(message []byte, signature *EdDSASignature
 
 // VerifyEdDSAMessage verifies an EdDSA signature for a string message
 func (pub *EdDSAPublicKey) VerifyEdDSAMessage(message string, signature *EdDSASignature) bool {
-	return eddsa.VerifyMessage(pub.PublicKey, message, signature.Signature)
+	return ed25519.VerifyMessage(pub.PublicKey, message, signature.Signature)
 }

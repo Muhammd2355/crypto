@@ -1,4 +1,4 @@
-package eddsa
+package ed25519
 
 import (
 	"github.com/go-crypto/crypto/rand"
@@ -270,24 +270,23 @@ func clampScalar(h []byte) *big.Int {
 }
 
 // bytesToScalar converts little-endian bytes to scalar
+// For RFC 8032 compliance, this should handle full 64-byte hashes
 func bytesToScalar(b []byte) *big.Int {
 	if len(b) == 0 {
 		return big.NewInt(0)
 	}
 	
-	// Ensure we have exactly 32 bytes
-	bytes := make([]byte, 32)
-	if len(b) >= 32 {
-		copy(bytes, b[:32])
-	} else {
-		copy(bytes, b)
+	// Use up to 64 bytes for RFC 8032 compliance
+	maxBytes := len(b)
+	if maxBytes > 64 {
+		maxBytes = 64
 	}
 	
 	// Convert from little-endian to big.Int
 	result := new(big.Int)
-	for i := 31; i >= 0; i-- {
+	for i := maxBytes - 1; i >= 0; i-- {
 		result.Lsh(result, 8)
-		result.Or(result, big.NewInt(int64(bytes[i])))
+		result.Or(result, big.NewInt(int64(b[i])))
 	}
 	
 	return result
