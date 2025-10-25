@@ -1,52 +1,123 @@
-// Package eddsa implements Edwards-curve Digital Signature Algorithm (EdDSA)
-// This implementation provides EdDSA signature generation and verification
-// using the secp256k1 elliptic curve for compatibility with the Python version.
 package eddsa
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
+	"github.com/go-crypto/crypto/rand"
+	"github.com/go-crypto/crypto/sha"
 	"math/big"
 )
 
-// Secp256k1 curve parameters
+// Ed25519 curve parameters from the original reference
 var (
-	// Prime field modulus
-	P = mustParseBigInt("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")
-	// Curve order (number of points)
-	N = mustParseBigInt("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")
-	// Generator point coordinates
-	Gx = mustParseBigInt("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-	Gy = mustParseBigInt("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8")
+	// Prime field: p = 2^255 - 19
+	P = mustParseBigInt("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed")
+	
+	// Order of base point: l = 2^252 + 27742317777372353535851937790883648493
+	L = mustParseBigInt("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+	
+	// Curve parameter: d = -121665/121666 mod p
+	D *big.Int
+	
+	// Square root of -1 mod p: I = 2^((p-1)/4) mod p
+	I *big.Int
+	
+	// Base point coordinates: By = 4/5 mod p
+	By *big.Int
+	Bx *big.Int
 )
 
-// Point represents a point on the elliptic curve
+func init() {
+	// Compute curve parameters exactly as in the original Ed25519 reference
+	
+	// d = -121665 * inv(121666) mod p
+	inv121666 := modInverse(big.NewInt(121666), P)
+	D = new(big.Int).Mul(big.NewInt(-121665), inv121666)
+	D.Mod(D, P)
+	
+	// I = 2^((p-1)/4) mod p
+	exp := new(big.Int).Sub(P, big.NewInt(1))
+	exp.Div(exp, big.NewInt(4))
+	I = new(big.Int).Exp(big.NewInt(2), exp, P)
+	
+	// By = 4 * inv(5) mod p
+	inv5 := modInverse(big.NewInt(5), P)
+	By = new(big.Int).Mul(big.NewInt(4), inv5)
+	By.Mod(By, P)
+	
+	// Compute Bx from By using curve equation
+	Bx = xrecover(By)
+}
+
+// Point represents a point on the Ed25519 curve
 type Point struct {
 	X, Y *big.Int
 }
 
-// PrivateKey represents an EdDSA private key
+// PrivateKey represents an Ed25519 private key
 type PrivateKey struct {
-	D *big.Int // Private scalar
+	Seed []byte    // 32-byte seed
+	A    *big.Int  // Clamped scalar from first half of H(seed)
+	AH   []byte    // Second half of H(seed) for nonce generation
 }
 
-// PublicKey represents an EdDSA public key
+// PublicKey represents an Ed25519 public key
 type PublicKey struct {
-	Point *Point // Public key point
+	Point *Point // Public key point A = a*B
 }
 
-// Signature represents an EdDSA signature
+// Signature represents an Ed25519 signature
 type Signature struct {
-	R, S *big.Int
+	R *Point   // R point (32 bytes when encoded)
+	S *big.Int // S scalar (32 bytes when encoded)
 }
 
-// mustParseBigInt parses a hex string to big.Int, panics on error
 func mustParseBigInt(s string) *big.Int {
 	n, ok := new(big.Int).SetString(s, 16)
 	if !ok {
 		panic("invalid hex string: " + s)
 	}
 	return n
+}
+
+// xrecover recovers x coordinate from y coordinate
+func xrecover(y *big.Int) *big.Int {
+	// xx = (y^2 - 1) / (d*y^2 + 1)
+	y2 := new(big.Int).Mul(y, y)
+	y2.Mod(y2, P)
+	
+	numerator := new(big.Int).Sub(y2, big.NewInt(1))
+	numerator.Mod(numerator, P)
+	
+	denominator := new(big.Int).Mul(D, y2)
+	denominator.Add(denominator, big.NewInt(1))
+	denominator.Mod(denominator, P)
+	
+	xx := new(big.Int).Mul(numerator, modInverse(denominator, P))
+	xx.Mod(xx, P)
+	
+	// x = xx^((p+3)/8) mod p
+	exp := new(big.Int).Add(P, big.NewInt(3))
+	exp.Div(exp, big.NewInt(8))
+	x := new(big.Int).Exp(xx, exp, P)
+	
+	// If x^2 != xx, then x = x*I
+	x2 := new(big.Int).Mul(x, x)
+	x2.Mod(x2, P)
+	if x2.Cmp(xx) != 0 {
+		x.Mul(x, I)
+		x.Mod(x, P)
+	}
+	
+	// If x is odd, set x = p - x
+	if x.Bit(0) == 1 {
+		x.Sub(P, x)
+	}
+	
+	return x
+}
+
+// modInverse computes modular inverse using extended Euclidean algorithm
+func modInverse(a, m *big.Int) *big.Int {
+	return new(big.Int).ModInverse(a, m)
 }
 
 // NewPoint creates a new point
@@ -57,236 +128,346 @@ func NewPoint(x, y *big.Int) *Point {
 	}
 }
 
-// Generator returns the generator point of secp256k1
-func Generator() *Point {
-	return NewPoint(Gx, Gy)
-}
 
-// IsOnCurve checks if a point is on the secp256k1 curve: y² = x³ + 7 (mod p)
+
+// IsOnCurve checks if point is on the Ed25519 curve
 func (p *Point) IsOnCurve() bool {
-	if p.X == nil || p.Y == nil {
-		return false
-	}
+	// -x^2 + y^2 = 1 + d*x^2*y^2
+	x2 := new(big.Int).Mul(p.X, p.X)
+	x2.Mod(x2, P)
 	
-	// y² mod p
 	y2 := new(big.Int).Mul(p.Y, p.Y)
 	y2.Mod(y2, P)
 	
-	// x³ + 7 mod p
-	x3 := new(big.Int).Mul(p.X, p.X)
-	x3.Mul(x3, p.X)
-	x3.Add(x3, big.NewInt(7))
-	x3.Mod(x3, P)
+	left := new(big.Int).Sub(y2, x2)
+	left.Mod(left, P)
 	
-	return y2.Cmp(x3) == 0
+	right := new(big.Int).Mul(D, x2)
+	right.Mul(right, y2)
+	right.Add(right, big.NewInt(1))
+	right.Mod(right, P)
+	
+	return left.Cmp(right) == 0
 }
 
-// Add performs elliptic curve point addition
+// Add performs Edwards curve point addition using unified formulas
 func (p *Point) Add(q *Point) *Point {
-	if p.X == nil || p.Y == nil {
-		return NewPoint(q.X, q.Y)
-	}
-	if q.X == nil || q.Y == nil {
-		return NewPoint(p.X, p.Y)
-	}
+	// Edwards addition formulas from Ed25519 reference implementation
+	// x3 = (x1*y2 + x2*y1) / (1 + d*x1*x2*y1*y2)
+	// y3 = (y1*y2 + x1*x2) / (1 - d*x1*x2*y1*y2)
 	
-	// Check if points are the same
-	if p.X.Cmp(q.X) == 0 {
-		if p.Y.Cmp(q.Y) == 0 {
-			return p.Double()
-		}
-		// Points are inverses, return point at infinity
-		return &Point{nil, nil}
-	}
+	x1y2 := new(big.Int).Mul(p.X, q.Y)
+	x1y2.Mod(x1y2, P)
 	
-	// λ = (y₂ - y₁) / (x₂ - x₁) mod p
-	dy := new(big.Int).Sub(q.Y, p.Y)
-	dx := new(big.Int).Sub(q.X, p.X)
-	dxInv := new(big.Int).ModInverse(dx, P)
-	lambda := new(big.Int).Mul(dy, dxInv)
-	lambda.Mod(lambda, P)
+	y1x2 := new(big.Int).Mul(p.Y, q.X)
+	y1x2.Mod(y1x2, P)
 	
-	// x₃ = λ² - x₁ - x₂ mod p
-	x3 := new(big.Int).Mul(lambda, lambda)
-	x3.Sub(x3, p.X)
-	x3.Sub(x3, q.X)
+	y1y2 := new(big.Int).Mul(p.Y, q.Y)
+	y1y2.Mod(y1y2, P)
+	
+	x1x2 := new(big.Int).Mul(p.X, q.X)
+	x1x2.Mod(x1x2, P)
+	
+	dxy := new(big.Int).Mul(D, x1x2)
+	dxy.Mul(dxy, y1y2)
+	dxy.Mod(dxy, P)
+	
+	// x3 numerator and denominator
+	x3num := new(big.Int).Add(x1y2, y1x2)
+	x3num.Mod(x3num, P)
+	
+	x3den := new(big.Int).Add(big.NewInt(1), dxy)
+	x3den.Mod(x3den, P)
+	
+	// y3 numerator and denominator - Reference formula: y1*y2 + x1*x2
+	y3num := new(big.Int).Add(y1y2, x1x2)
+	y3num.Mod(y3num, P)
+	
+	y3den := new(big.Int).Sub(big.NewInt(1), dxy)
+	y3den.Mod(y3den, P)
+	
+	// Compute final coordinates
+	x3 := new(big.Int).Mul(x3num, modInverse(x3den, P))
 	x3.Mod(x3, P)
 	
-	// y₃ = λ(x₁ - x₃) - y₁ mod p
-	y3 := new(big.Int).Sub(p.X, x3)
-	y3.Mul(y3, lambda)
-	y3.Sub(y3, p.Y)
+	y3 := new(big.Int).Mul(y3num, modInverse(y3den, P))
 	y3.Mod(y3, P)
-	
+
 	return NewPoint(x3, y3)
 }
 
-// Double performs elliptic curve point doubling
-func (p *Point) Double() *Point {
-	if p.X == nil || p.Y == nil {
-		return &Point{nil, nil}
-	}
-	
-	// λ = (3x₁² + a) / (2y₁) mod p, where a = 0 for secp256k1
-	numerator := new(big.Int).Mul(p.X, p.X)
-	numerator.Mul(numerator, big.NewInt(3))
-	
-	denominator := new(big.Int).Mul(p.Y, big.NewInt(2))
-	denominatorInv := new(big.Int).ModInverse(denominator, P)
-	
-	lambda := new(big.Int).Mul(numerator, denominatorInv)
-	lambda.Mod(lambda, P)
-	
-	// x₃ = λ² - 2x₁ mod p
-	x3 := new(big.Int).Mul(lambda, lambda)
-	x3.Sub(x3, new(big.Int).Mul(p.X, big.NewInt(2)))
-	x3.Mod(x3, P)
-	
-	// y₃ = λ(x₁ - x₃) - y₁ mod p
-	y3 := new(big.Int).Sub(p.X, x3)
-	y3.Mul(y3, lambda)
-	y3.Sub(y3, p.Y)
-	y3.Mod(y3, P)
-	
-	return NewPoint(x3, y3)
-}
-
-// ScalarMult performs scalar multiplication of a point
+// ScalarMult performs scalar multiplication using double-and-add
 func (p *Point) ScalarMult(k *big.Int) *Point {
 	if k.Sign() == 0 {
-		return &Point{nil, nil} // Point at infinity
+		return NewPoint(big.NewInt(0), big.NewInt(1)) // Identity point
 	}
 	
-	// Make a copy of k to avoid modifying the original
+	// Use the double-and-add algorithm from the original Ed25519 reference
+	result := NewPoint(big.NewInt(0), big.NewInt(1)) // Identity point
+	base := NewPoint(p.X, p.Y)
+	
+	// Process bits from least significant to most significant
 	kCopy := new(big.Int).Set(k)
-	
-	result := &Point{nil, nil}
-	addend := NewPoint(p.X, p.Y)
-	
 	for kCopy.Sign() > 0 {
 		if kCopy.Bit(0) == 1 {
-			result = result.Add(addend)
+			result = result.Add(base)
 		}
-		addend = addend.Double()
-		kCopy.Rsh(kCopy, 1)
+		base = base.Add(base) // Double
+		kCopy.Rsh(kCopy, 1)   // Shift right by 1 bit
 	}
 	
 	return result
 }
 
-// GenerateKey generates a new EdDSA key pair
+// Export functions for debugging
+func H(data []byte) []byte {
+	hash := sha.Sum512(data)
+	return hash[:]
+}
+
+func ClampScalar(h []byte) *big.Int {
+	return clampScalar(h)
+}
+
+func ScalarToBytes(s *big.Int) []byte {
+	return scalarToBytes(s)
+}
+
+func EncodePoint(p *Point) []byte {
+	return encodePoint(p)
+}
+
+func BasePoint() *Point {
+	return NewPoint(Bx, By)
+}
+
+// clampScalar clamps a scalar according to RFC 8032 Ed25519 specification
+func clampScalar(h []byte) *big.Int {
+	if len(h) < 32 {
+		return big.NewInt(0)
+	}
+	
+	// Make a copy of the first 32 bytes for bit manipulation
+	clamped := make([]byte, 32)
+	copy(clamped, h[:32])
+	
+	// RFC 8032 bit operations:
+	// Clear bits 0, 1, 2 of the first byte
+	clamped[0] &= 248  // 248 = 0xF8 = 11111000
+	
+	// Clear bit 255 (bit 7 of byte 31) and set bit 254 (bit 6 of byte 31)
+	clamped[31] &= 127  // 127 = 0x7F = 01111111 (clear bit 7)
+	clamped[31] |= 64   // 64  = 0x40 = 01000000 (set bit 6)
+	
+	// Convert to little-endian integer
+	// Ed25519 uses little-endian, but Go's SetBytes expects big-endian
+	reversed := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		reversed[i] = clamped[31-i]
+	}
+	
+	return new(big.Int).SetBytes(reversed)
+}
+
+// bytesToScalar converts little-endian bytes to scalar
+func bytesToScalar(b []byte) *big.Int {
+	if len(b) == 0 {
+		return big.NewInt(0)
+	}
+	
+	// Ensure we have exactly 32 bytes
+	bytes := make([]byte, 32)
+	if len(b) >= 32 {
+		copy(bytes, b[:32])
+	} else {
+		copy(bytes, b)
+	}
+	
+	// Convert from little-endian to big.Int
+	result := new(big.Int)
+	for i := 31; i >= 0; i-- {
+		result.Lsh(result, 8)
+		result.Or(result, big.NewInt(int64(bytes[i])))
+	}
+	
+	return result
+}
+
+// scalarToBytes converts scalar to 32-byte little-endian representation
+func scalarToBytes(s *big.Int) []byte {
+	// Convert scalar to 32-byte little-endian representation
+	bytes := make([]byte, 32)
+	
+	// Get the bytes in big-endian format
+	sBytes := s.Bytes()
+	
+	// Convert to little-endian
+	for i := 0; i < len(sBytes) && i < 32; i++ {
+		bytes[i] = sBytes[len(sBytes)-1-i]
+	}
+	
+	return bytes
+}
+
+// encodePoint encodes a point according to Ed25519 specification
+func encodePoint(p *Point) []byte {
+	// Encode point according to Ed25519 specification
+	// y-coordinate (32 bytes) with x sign bit in MSB
+	yBytes := make([]byte, 32)
+	
+	// Convert y to little-endian bytes
+	yBig := new(big.Int).Set(p.Y)
+	for i := 0; i < 32; i++ {
+		yBytes[i] = byte(yBig.Uint64() & 0xFF)
+		yBig.Rsh(yBig, 8)
+	}
+	
+	// Set the sign bit (MSB of last byte) based on x parity
+	if p.X.Bit(0) == 1 {
+		yBytes[31] |= 0x80
+	}
+	
+	return yBytes
+}
+
+// decodePoint decodes a point from Ed25519 encoding
+func decodePoint(b []byte) *Point {
+	if len(b) != 32 {
+		return nil
+	}
+	
+	// Extract y-coordinate from little-endian bytes
+	yBytes := make([]byte, 32)
+	copy(yBytes, b)
+	
+	// Extract sign bit and clear it
+	xSign := (yBytes[31] & 0x80) != 0
+	yBytes[31] &= 0x7F
+	
+	// Convert y from little-endian to big.Int
+	y := new(big.Int)
+	for i := 31; i >= 0; i-- {
+		y.Lsh(y, 8)
+		y.Or(y, big.NewInt(int64(yBytes[i])))
+	}
+	
+	// Recover x-coordinate
+	x := xrecover(y)
+	if x == nil {
+		return nil
+	}
+	
+	// Adjust x sign based on extracted bit
+	if (x.Bit(0) == 1) != xSign {
+		x.Sub(P, x)
+	}
+	
+	point := NewPoint(x, y)
+	if !point.IsOnCurve() {
+		return nil
+	}
+	
+	return point
+}
+
+// GenerateKey generates a new Ed25519 key pair
 func GenerateKey() (*PrivateKey, *PublicKey, error) {
-	// Generate random private key (ensure it's not zero and less than N)
-	for {
-		d, err := rand.Int(rand.Reader, new(big.Int).Sub(N, big.NewInt(1)))
-		if err != nil {
-			return nil, nil, err
-		}
-		
-		// Add 1 to ensure d is in range [1, N-1]
-		d.Add(d, big.NewInt(1))
-		
-		// Calculate public key: Q = d * G
-		g := Generator()
-		q := g.ScalarMult(d)
-		
-		// Ensure we got a valid point
-		if q.X != nil && q.Y != nil && q.IsOnCurve() {
-			privateKey := &PrivateKey{D: d}
-			publicKey := &PublicKey{Point: q}
-			return privateKey, publicKey, nil
-		}
+	// Generate 32 random bytes as seed
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, nil, err
 	}
+	
+	// Compute private scalar and nonce from seed using RFC 8032 process
+	h := H(seed)
+	a := clampScalar(h) // Pass full hash, function will use first 32 bytes
+	ah := h[32:]
+	
+	// Compute public key A = a*B
+	B := BasePoint()
+	A := B.ScalarMult(a)
+	
+	privateKey := &PrivateKey{
+		Seed: seed,
+		A:    a,
+		AH:   ah,
+	}
+	
+	publicKey := &PublicKey{
+		Point: A,
+	}
+	
+	return privateKey, publicKey, nil
 }
 
-// Sign creates an EdDSA signature for the given message
+// Sign creates an Ed25519 signature
 func (priv *PrivateKey) Sign(message []byte) (*Signature, error) {
-	// Hash the message
-	hash := sha256.Sum256(message)
-	h := new(big.Int).SetBytes(hash[:])
+	// Compute r = H(AH || M) mod L
+	rInput := append(priv.AH, message...)
+	rHash := H(rInput)
+	r := bytesToScalar(rHash)
+	r.Mod(r, L)
 	
-	// Generate random nonce k in range [1, N-1]
-	for {
-		k, err := rand.Int(rand.Reader, new(big.Int).Sub(N, big.NewInt(1)))
-		if err != nil {
-			return nil, err
-		}
-		
-		// Add 1 to ensure k is in range [1, N-1]
-		k.Add(k, big.NewInt(1))
-		
-		// Calculate r = (k * G).x mod n
-		g := Generator()
-		rPoint := g.ScalarMult(k)
-		if rPoint.X == nil {
-			continue // Try again with different k
-		}
-		
-		r := new(big.Int).Mod(rPoint.X, N)
-		if r.Sign() == 0 {
-			continue // r cannot be zero
-		}
-		
-		// Calculate s = k⁻¹(h + r * d) mod n
-		kInv := new(big.Int).ModInverse(k, N)
-		if kInv == nil {
-			continue // Try again with different k
-		}
-		
-		rd := new(big.Int).Mul(r, priv.D)
-		hrd := new(big.Int).Add(h, rd)
-		s := new(big.Int).Mul(kInv, hrd)
-		s.Mod(s, N)
-		
-		if s.Sign() == 0 {
-			continue // s cannot be zero
-		}
-		
-		return &Signature{R: r, S: s}, nil
-	}
+	// Compute R = r * B
+	B := BasePoint()
+	R := B.ScalarMult(r)
+	
+	// Encode R and public key A
+	RBytes := encodePoint(R)
+	A := priv.GetPublicKey()
+	ABytes := encodePoint(A.Point)
+	
+	// Compute k = H(R || A || M) mod L
+	kInput := append(RBytes, ABytes...)
+	kInput = append(kInput, message...)
+	kHash := H(kInput)
+	k := bytesToScalar(kHash)
+	k.Mod(k, L)
+	
+	// Compute S = (r + k*a) mod L
+	S := new(big.Int).Mul(k, priv.A)
+	S.Add(S, r)
+	S.Mod(S, L)
+	
+	return &Signature{R: R, S: S}, nil
 }
 
-// Verify verifies an EdDSA signature
+// GetPublicKey returns the public key corresponding to this private key
+func (priv *PrivateKey) GetPublicKey() *PublicKey {
+	B := BasePoint()
+	A := B.ScalarMult(priv.A)
+	return &PublicKey{Point: A}
+}
+
+// Verify verifies an Ed25519 signature
 func (pub *PublicKey) Verify(message []byte, sig *Signature) bool {
-	// Hash the message
-	hash := sha256.Sum256(message)
-	h := new(big.Int).SetBytes(hash[:])
+	// Encode points
+	RBytes := encodePoint(sig.R)
+	ABytes := encodePoint(pub.Point)
 	
-	// Calculate s⁻¹ mod n
-	sInv := new(big.Int).ModInverse(sig.S, N)
-	if sInv == nil {
-		return false
-	}
+	// Compute k = H(R || A || M) mod L
+	kInput := append(RBytes, ABytes...)
+	kInput = append(kInput, message...)
+	kHash := H(kInput)
+	k := bytesToScalar(kHash)
+	k.Mod(k, L)
 	
-	// Calculate u1 = h * s⁻¹ mod n
-	u1 := new(big.Int).Mul(h, sInv)
-	u1.Mod(u1, N)
+	// Verify: S*B = R + k*A
+	B := BasePoint()
+	left := B.ScalarMult(sig.S)
 	
-	// Calculate u2 = r * s⁻¹ mod n
-	u2 := new(big.Int).Mul(sig.R, sInv)
-	u2.Mod(u2, N)
+	right := pub.Point.ScalarMult(k)
+	right = sig.R.Add(right)
 	
-	// Calculate P = u1 * G + u2 * Q
-	g := Generator()
-	p1 := g.ScalarMult(u1)
-	p2 := pub.Point.ScalarMult(u2)
-	p := p1.Add(p2)
-	
-	// Verify that P.x mod n == r
-	if p.X == nil {
-		return false
-	}
-	
-	result := new(big.Int).Mod(p.X, N)
-	return result.Cmp(sig.R) == 0
+	return left.X.Cmp(right.X) == 0 && left.Y.Cmp(right.Y) == 0
 }
 
-// SignMessage is a convenience function that signs a string message
+// SignMessage signs a string message
 func SignMessage(privateKey *PrivateKey, message string) (*Signature, error) {
 	return privateKey.Sign([]byte(message))
 }
 
-// VerifyMessage is a convenience function that verifies a signature for a string message
+// VerifyMessage verifies a signature for a string message
 func VerifyMessage(publicKey *PublicKey, message string, signature *Signature) bool {
 	return publicKey.Verify([]byte(message), signature)
 }

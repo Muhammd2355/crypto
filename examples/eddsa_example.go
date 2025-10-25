@@ -29,7 +29,7 @@ func main() {
 	}
 
 	// Display Alice's keys
-	fmt.Printf("Alice's private key: %s\n", privateKey.PrivateKey.D.Text(16))
+	fmt.Printf("Alice's private key A: %s\n", privateKey.PrivateKey.A.Text(16))
 	fmt.Printf("Alice's public key X: %s\n", publicKey.PublicKey.Point.X.Text(16))
 	fmt.Printf("Alice's public key Y: %s\n", publicKey.PublicKey.Point.Y.Text(16))
 
@@ -40,7 +40,8 @@ func main() {
 	}
 
 	fmt.Printf("\nSignature:\n")
-	fmt.Printf("r = %s\n", signature.Signature.R.Text(16))
+	fmt.Printf("r X = %s\n", signature.Signature.R.X.Text(16))
+	fmt.Printf("r Y = %s\n", signature.Signature.R.Y.Text(16))
 	fmt.Printf("s = %s\n", signature.Signature.S.Text(16))
 
 	// Verify the signature
@@ -91,15 +92,15 @@ func main() {
 
 	// Show curve information
 	fmt.Printf("\n--- Curve Information ---\n")
-	g := eddsa.Generator()
+	g := eddsa.BasePoint()
 	fmt.Printf("Generator point X: %s\n", g.X.Text(16))
 	fmt.Printf("Generator point Y: %s\n", g.Y.Text(16))
 	fmt.Printf("Curve prime P: %s\n", eddsa.P.Text(16))
-	fmt.Printf("Curve order N: %s\n", eddsa.N.Text(16))
+	fmt.Printf("Curve order L: %s\n", eddsa.L.Text(16))
 	
 	// Verify generator is on curve
 	if g.IsOnCurve() {
-		fmt.Println("Generator point is on secp256k1 curve ✓")
+		fmt.Println("Generator point is on Ed25519 curve ✓")
 	} else {
 		fmt.Println("Generator point is NOT on curve ✗")
 	}
