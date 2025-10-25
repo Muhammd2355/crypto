@@ -5,6 +5,7 @@ package crypto
 import (
 	"errors"
 	"github.com/go-crypto/crypto/aes"
+	"github.com/go-crypto/crypto/eddsa"
 	"github.com/go-crypto/crypto/evp"
 	"github.com/go-crypto/crypto/internal"
 	"github.com/go-crypto/crypto/keystore"
@@ -43,6 +44,21 @@ type Hash interface {
 // PublicKey represents an RSA public key
 type PublicKey struct {
 	*rsa.PublicKey
+}
+
+// EdDSAPrivateKey represents an EdDSA private key
+type EdDSAPrivateKey struct {
+	*eddsa.PrivateKey
+}
+
+// EdDSAPublicKey represents an EdDSA public key
+type EdDSAPublicKey struct {
+	*eddsa.PublicKey
+}
+
+// EdDSASignature represents an EdDSA signature
+type EdDSASignature struct {
+	*eddsa.Signature
 }
 
 // PrivateKey represents an RSA private key
@@ -330,4 +346,44 @@ func RandomBytes(n int) ([]byte, error) {
 		return nil, errors.New("failed to generate random bytes")
 	}
 	return bytes, nil
+}
+
+// GenerateEdDSAKeyPair generates a new EdDSA key pair
+func GenerateEdDSAKeyPair() (*EdDSAPrivateKey, *EdDSAPublicKey, error) {
+	priv, pub, err := eddsa.GenerateKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	
+	return &EdDSAPrivateKey{priv}, &EdDSAPublicKey{pub}, nil
+}
+
+// SignEdDSA creates an EdDSA signature for the given message
+func (priv *EdDSAPrivateKey) SignEdDSA(message []byte) (*EdDSASignature, error) {
+	sig, err := priv.PrivateKey.Sign(message)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &EdDSASignature{sig}, nil
+}
+
+// SignEdDSAMessage creates an EdDSA signature for a string message
+func (priv *EdDSAPrivateKey) SignEdDSAMessage(message string) (*EdDSASignature, error) {
+	sig, err := eddsa.SignMessage(priv.PrivateKey, message)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &EdDSASignature{sig}, nil
+}
+
+// VerifyEdDSA verifies an EdDSA signature
+func (pub *EdDSAPublicKey) VerifyEdDSA(message []byte, signature *EdDSASignature) bool {
+	return pub.PublicKey.Verify(message, signature.Signature)
+}
+
+// VerifyEdDSAMessage verifies an EdDSA signature for a string message
+func (pub *EdDSAPublicKey) VerifyEdDSAMessage(message string, signature *EdDSASignature) bool {
+	return eddsa.VerifyMessage(pub.PublicKey, message, signature.Signature)
 }
