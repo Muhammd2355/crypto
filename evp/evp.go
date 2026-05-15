@@ -2,8 +2,9 @@
 package evp
 
 import (
+	stdcipher "crypto/cipher"
 	"errors"
-	
+
 	"github.com/go-crypto/crypto/aes"
 	"github.com/go-crypto/crypto/hmac"
 	"github.com/go-crypto/crypto/internal"
@@ -55,12 +56,13 @@ const (
 	GCM = "GCM"
 )
 
-// CipherContext represents an encryption/decryption context
+// CipherContext represents an encryption/decryption context.
 type CipherContext struct {
 	cipher    internal.Block
 	mode      string
 	blockSize int
 	keySize   int
+	iv        []byte
 	ivSize    int
 	encrypt   bool
 }
@@ -73,11 +75,7 @@ type DigestContext struct {
 // NewCipher creates a new cipher instance
 func NewCipher(cipherType string) (internal.Block, error) {
 	switch cipherType {
-	case AES128:
-		return nil, errors.New("key required for cipher creation")
-	case AES192:
-		return nil, errors.New("key required for cipher creation")
-	case AES256:
+	case AES128, AES192, AES256:
 		return nil, errors.New("key required for cipher creation")
 	default:
 		return nil, errors.New("unsupported cipher type")
@@ -88,17 +86,17 @@ func NewCipher(cipherType string) (internal.Block, error) {
 func NewCipherWithKey(cipherType string, key []byte) (internal.Block, error) {
 	switch cipherType {
 	case AES128:
-		if len(key) != 16 {
+		if len(key) != aes.KeySize128 {
 			return nil, internal.ErrInvalidKeySize
 		}
 		return aes.NewCipher(key)
 	case AES192:
-		if len(key) != 24 {
+		if len(key) != aes.KeySize192 {
 			return nil, internal.ErrInvalidKeySize
 		}
 		return aes.NewCipher(key)
 	case AES256:
-		if len(key) != 32 {
+		if len(key) != aes.KeySize256 {
 			return nil, internal.ErrInvalidKeySize
 		}
 		return aes.NewCipher(key)
@@ -107,51 +105,115 @@ func NewCipherWithKey(cipherType string, key []byte) (internal.Block, error) {
 	}
 }
 
-// NewCipherContext creates a new cipher context for encryption/decryption
+// NewCipherContext creates a new cipher context for encryption/decryption.
 func NewCipherContext(cipherType, mode string, key, iv []byte, encrypt bool) (*CipherContext, error) {
 	block, err := NewCipherWithKey(cipherType, key)
 	if err != nil {
 		return nil, err
 	}
-	
+
+	blockSize := block.BlockSize()
+	if mode != ECB && mode != GCM && len(iv) != blockSize {
+		return nil, errors.New("invalid IV size")
+	}
+	if mode == GCM && len(iv) == 0 {
+		return nil, errors.New("invalid nonce size")
+	}
+
 	ctx := &CipherContext{
 		cipher:    block,
 		mode:      mode,
-		blockSize: block.BlockSize(),
+		blockSize: blockSize,
 		keySize:   len(key),
+		iv:        append([]byte(nil), iv...),
 		ivSize:    len(iv),
 		encrypt:   encrypt,
 	}
-	
-	// Simplified mode handling - just store the mode string
-	// Actual encryption/decryption would need to be implemented based on mode
-	return ctx, nil
+
+	switch mode {
+	case CBC, ECB, CFB, OFB, CTR, GCM:
+		return ctx, nil
+	default:
+		return nil, errors.New("unsupported cipher mode")
+	}
 }
 
-// Update processes data through the cipher context
+// Update processes data through the cipher context. Block modes require full blocks;
+// use the helper functions for OpenSSL-compatible PKCS#7 padding.
 func (ctx *CipherContext) Update(dst, src []byte) error {
-	// Simplified implementation - just copy data for now
-	copy(dst, src)
+	if len(dst) < len(src) {
+		return errors.New("output buffer too small")
+	}
+
+	switch ctx.mode {
+	case CBC:
+		if len(src)%ctx.blockSize != 0 {
+			return errors.New("input not full blocks")
+		}
+		if ctx.encrypt {
+			stdcipher.NewCBCEncrypter(ctx.cipher, ctx.iv).CryptBlocks(dst[:len(src)], src)
+		} else {
+			stdcipher.NewCBCDecrypter(ctx.cipher, ctx.iv).CryptBlocks(dst[:len(src)], src)
+		}
+	case ECB:
+		if len(src)%ctx.blockSize != 0 {
+			return errors.New("input not full blocks")
+		}
+		for len(src) > 0 {
+			if ctx.encrypt {
+				ctx.cipher.Encrypt(dst[:ctx.blockSize], src[:ctx.blockSize])
+			} else {
+				ctx.cipher.Decrypt(dst[:ctx.blockSize], src[:ctx.blockSize])
+			}
+			src = src[ctx.blockSize:]
+			dst = dst[ctx.blockSize:]
+		}
+	case CFB:
+		stream := stdcipher.NewCFBEncrypter(ctx.cipher, ctx.iv)
+		if !ctx.encrypt {
+			stream = stdcipher.NewCFBDecrypter(ctx.cipher, ctx.iv)
+		}
+		stream.XORKeyStream(dst[:len(src)], src)
+	case OFB:
+		stdcipher.NewOFB(ctx.cipher, ctx.iv).XORKeyStream(dst[:len(src)], src)
+	case CTR:
+		stdcipher.NewCTR(ctx.cipher, ctx.iv).XORKeyStream(dst[:len(src)], src)
+	case GCM:
+		return errors.New("use Seal/Open for GCM mode")
+	default:
+		return errors.New("unsupported cipher mode")
+	}
+
 	return nil
 }
 
-// Final finalizes the cipher operation
+// Final finalizes the cipher operation.
 func (ctx *CipherContext) Final(dst []byte) (int, error) {
-	// For block modes, padding should be handled here
-	// This is a simplified implementation
 	return 0, nil
 }
 
-// Seal performs AEAD encryption (for GCM mode)
+// Seal performs AEAD encryption (for GCM mode).
 func (ctx *CipherContext) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
-	// Simplified implementation - not supported in this version
-	return nil
+	if ctx.mode != GCM {
+		return nil
+	}
+	aead, err := stdcipher.NewGCM(ctx.cipher)
+	if err != nil || len(nonce) != aead.NonceSize() {
+		return nil
+	}
+	return aead.Seal(dst, nonce, plaintext, additionalData)
 }
 
-// Open performs AEAD decryption (for GCM mode)
+// Open performs AEAD decryption (for GCM mode).
 func (ctx *CipherContext) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
-	// Simplified implementation - not supported in this version
-	return nil, errors.New("AEAD not supported in simplified version")
+	if ctx.mode != GCM {
+		return nil, errors.New("AEAD only supported for GCM mode")
+	}
+	aead, err := stdcipher.NewGCM(ctx.cipher)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Open(dst, nonce, ciphertext, additionalData)
 }
 
 // NewDigest creates a new hash context
@@ -236,7 +298,7 @@ func (ctx *RSAContext) GenerateKey(bits int, random *rand.Reader) error {
 	if err != nil {
 		return err
 	}
-	
+
 	ctx.privateKey = key
 	ctx.publicKey = &key.PublicKey
 	return nil
@@ -271,41 +333,58 @@ func (ctx *RSAContext) Decrypt(random *rand.Reader, ciphertext []byte) ([]byte, 
 
 // Utility functions
 
-// EncryptAES256CBC encrypts data using AES-256-CBC
-func EncryptAES256CBC(key, iv, plaintext []byte) ([]byte, error) {
-	if len(plaintext)%aes.BlockSize != 0 {
-		plaintext = internal.PKCS7Pad(plaintext, aes.BlockSize)
-	}
-	
-	ctx, err := NewCipherContext(AES256, CBC, key, iv, true)
+// EncryptAESCBC encrypts data with AES-CBC and OpenSSL-compatible PKCS#7 padding.
+func EncryptAESCBC(key, iv, plaintext []byte) ([]byte, error) {
+	cipherType, err := cipherTypeForKey(key)
 	if err != nil {
 		return nil, err
 	}
-	
-	ciphertext := make([]byte, len(plaintext))
-	err = ctx.Update(ciphertext, plaintext)
+	padded := internal.PKCS7Pad(append([]byte(nil), plaintext...), aes.BlockSize)
+	ctx, err := NewCipherContext(cipherType, CBC, key, iv, true)
 	if err != nil {
 		return nil, err
 	}
-	
+	ciphertext := make([]byte, len(padded))
+	if err := ctx.Update(ciphertext, padded); err != nil {
+		return nil, err
+	}
 	return ciphertext, nil
 }
 
-// DecryptAES256CBC decrypts data using AES-256-CBC
-func DecryptAES256CBC(key, iv, ciphertext []byte) ([]byte, error) {
-	ctx, err := NewCipherContext(AES256, CBC, key, iv, false)
+// DecryptAESCBC decrypts AES-CBC data and removes OpenSSL-compatible PKCS#7 padding.
+func DecryptAESCBC(key, iv, ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+		return nil, internal.ErrInvalidPadding
+	}
+	cipherType, err := cipherTypeForKey(key)
 	if err != nil {
 		return nil, err
 	}
-	
+	ctx, err := NewCipherContext(cipherType, CBC, key, iv, false)
+	if err != nil {
+		return nil, err
+	}
 	plaintext := make([]byte, len(ciphertext))
-	err = ctx.Update(plaintext, ciphertext)
-	if err != nil {
+	if err := ctx.Update(plaintext, ciphertext); err != nil {
 		return nil, err
 	}
-	
-	// Remove PKCS7 padding
 	return internal.PKCS7Unpad(plaintext, aes.BlockSize)
+}
+
+// EncryptAES256CBC encrypts data using AES-256-CBC.
+func EncryptAES256CBC(key, iv, plaintext []byte) ([]byte, error) {
+	if len(key) != aes.KeySize256 {
+		return nil, internal.ErrInvalidKeySize
+	}
+	return EncryptAESCBC(key, iv, plaintext)
+}
+
+// DecryptAES256CBC decrypts data using AES-256-CBC.
+func DecryptAES256CBC(key, iv, ciphertext []byte) ([]byte, error) {
+	if len(key) != aes.KeySize256 {
+		return nil, internal.ErrInvalidKeySize
+	}
+	return DecryptAESCBC(key, iv, ciphertext)
 }
 
 // HashSHA256 computes SHA-256 hash
@@ -320,11 +399,24 @@ func HMACSHA256(key, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	err = ctx.Update(data)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return ctx.Final(), nil
+}
+
+func cipherTypeForKey(key []byte) (string, error) {
+	switch len(key) {
+	case aes.KeySize128:
+		return AES128, nil
+	case aes.KeySize192:
+		return AES192, nil
+	case aes.KeySize256:
+		return AES256, nil
+	default:
+		return "", internal.ErrInvalidKeySize
+	}
 }

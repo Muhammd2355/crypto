@@ -1,3 +1,6 @@
+//go:build ignore
+// +build ignore
+
 // Package main demonstrates EdDSA signature verification with RFC 8032 test vectors
 // This file allows you to verify that our implementation correctly handles the official test vectors
 package main
@@ -17,11 +20,11 @@ func main() {
 
 	// RFC 8032 Test Vectors
 	testVectors := []struct {
-		name       string
-		seed       string
-		publicKey  string
-		message    string
-		signature  string
+		name      string
+		seed      string
+		publicKey string
+		message   string
+		signature string
 	}{
 		{
 			name:      "RFC 8032 Test Vector 1",
@@ -71,8 +74,8 @@ func main() {
 		// Create private key from seed (following RFC 8032 process)
 		h := ed25519.H(seedBytes)
 		a := ed25519.ClampScalar(h) // Use first 32 bytes for scalar
-		ah := h[32:]              // Use second 32 bytes for nonce
-		
+		ah := h[32:]                // Use second 32 bytes for nonce
+
 		privateKey := &ed25519.PrivateKey{
 			Seed: seedBytes,
 			A:    a,
@@ -81,11 +84,11 @@ func main() {
 
 		// Get public key
 		publicKey := privateKey.GetPublicKey()
-		
+
 		// Check if our derived public key matches RFC
 		derivedPubKey := ed25519.EncodePoint(publicKey.Point)
 		fmt.Printf("   Our PubKey: %x\n", derivedPubKey)
-		
+
 		pubKeyMatch := hex.EncodeToString(derivedPubKey) == tv.publicKey
 		fmt.Printf("   PubKey Match: %v", pubKeyMatch)
 		if pubKeyMatch {
@@ -105,9 +108,9 @@ func main() {
 		ourSigBytes := make([]byte, 64)
 		copy(ourSigBytes[:32], ed25519.EncodePoint(ourSignature.R))
 		copy(ourSigBytes[32:], ed25519.ScalarToBytes(ourSignature.S))
-		
+
 		fmt.Printf("   Our Sig:    %x\n", ourSigBytes)
-		
+
 		// Check if signatures match (they likely won't, but that's OK)
 		sigMatch := hex.EncodeToString(ourSigBytes) == tv.signature
 		fmt.Printf("   Sig Match:  %v", sigMatch)
