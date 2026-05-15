@@ -3,7 +3,7 @@ package rsa
 
 import (
 	"errors"
-	
+
 	"github.com/go-crypto/crypto/rand"
 )
 
@@ -16,11 +16,11 @@ const (
 )
 
 var (
-	ErrDecryption      = errors.New("crypto/rsa: decryption error")
-	ErrVerification    = errors.New("crypto/rsa: verification error")
-	ErrDataToLarge     = errors.New("crypto/rsa: message too long for RSA public key size")
-	ErrDataTooSmall    = errors.New("crypto/rsa: message too short")
-	ErrInvalidPadding  = errors.New("crypto/rsa: invalid padding")
+	ErrDecryption     = errors.New("crypto/rsa: decryption error")
+	ErrVerification   = errors.New("crypto/rsa: verification error")
+	ErrDataToLarge    = errors.New("crypto/rsa: message too long for RSA public key size")
+	ErrDataTooSmall   = errors.New("crypto/rsa: message too short")
+	ErrInvalidPadding = errors.New("crypto/rsa: invalid padding")
 )
 
 // PublicKey represents an RSA public key
@@ -31,19 +31,19 @@ type PublicKey struct {
 
 // PrivateKey represents an RSA private key
 type PrivateKey struct {
-	PublicKey            // public part
+	PublicKey                // public part
 	D         *rand.BigInt   // private exponent
 	Primes    []*rand.BigInt // prime factors of N, has >= 2 elements
-	
+
 	// Precomputed values for CRT
 	Precomputed PrecomputedValues
 }
 
 // PrecomputedValues contains precomputed values for CRT
 type PrecomputedValues struct {
-	Dp, Dq *rand.BigInt      // D mod (P-1), D mod (Q-1)
-	Qinv   *rand.BigInt      // Q^-1 mod P
-	CRTValues []CRTValue  // additional values for multi-prime RSA
+	Dp, Dq    *rand.BigInt // D mod (P-1), D mod (Q-1)
+	Qinv      *rand.BigInt // Q^-1 mod P
+	CRTValues []CRTValue   // additional values for multi-prime RSA
 }
 
 // CRTValue contains values for Chinese Remainder Theorem
@@ -63,17 +63,17 @@ func GenerateMultiPrimeKey(random *rand.Reader, nprimes int, bits int) (*Private
 	if nprimes < 2 {
 		return nil, errors.New("crypto/rsa: GenerateMultiPrimeKey: nprimes must be >= 2")
 	}
-	
+
 	if bits < 64 {
 		return nil, errors.New("crypto/rsa: too few bits in RSA key")
 	}
-	
+
 	primes := make([]*rand.BigInt, nprimes)
-	
+
 NextSetOfPrimes:
 	for {
 		todo := bits
-		
+
 		// Generate primes
 		for i := 0; i < nprimes; i++ {
 			var err error
@@ -83,7 +83,7 @@ NextSetOfPrimes:
 			}
 			todo -= primes[i].BitLen()
 		}
-		
+
 		// Check that the product is of the right bit-length
 		n := new(rand.BigInt).Set(primes[0])
 		for _, prime := range primes[1:] {
@@ -92,7 +92,7 @@ NextSetOfPrimes:
 		if n.BitLen() != bits {
 			continue NextSetOfPrimes
 		}
-		
+
 		// Check that primes are distinct
 		for i, prime := range primes {
 			for j := i + 1; j < len(primes); j++ {
@@ -101,10 +101,10 @@ NextSetOfPrimes:
 				}
 			}
 		}
-		
+
 		break
 	}
-	
+
 	// Sort primes in ascending order as required by validation
 	for i := 0; i < len(primes)-1; i++ {
 		for j := i + 1; j < len(primes); j++ {
@@ -113,24 +113,24 @@ NextSetOfPrimes:
 			}
 		}
 	}
-	
+
 	// Calculate N = p1 * p2 * ... * pn
 	n := new(rand.BigInt).Set(primes[0])
 	for _, prime := range primes[1:] {
 		n.Mul(n, prime)
 	}
-	
+
 	// Calculate totient φ(n) = (p1-1) * (p2-1) * ... * (pn-1)
 	totient := new(rand.BigInt).Sub(primes[0], rand.NewInt(1))
 	for _, prime := range primes[1:] {
 		pminus1 := new(rand.BigInt).Sub(prime, rand.NewInt(1))
 		totient.Mul(totient, pminus1)
 	}
-	
+
 	// Choose public exponent e
 	e := 65537
 	g := new(rand.BigInt)
-	
+
 	for {
 		g.GCD(nil, nil, rand.NewInt(int64(e)), totient)
 		if g.Cmp(rand.NewInt(1)) == 0 {
@@ -138,14 +138,14 @@ NextSetOfPrimes:
 		}
 		e += 2
 	}
-	
+
 	// Calculate private exponent d = e^-1 mod φ(n)
 	d := new(rand.BigInt)
 	d.ModInverse(rand.NewInt(int64(e)), totient)
 	if d == nil {
 		return nil, errors.New("crypto/rsa: unable to find modular inverse")
 	}
-	
+
 	// Create the private key
 	key := &PrivateKey{
 		PublicKey: PublicKey{
@@ -155,10 +155,10 @@ NextSetOfPrimes:
 		D:      d,
 		Primes: primes,
 	}
-	
+
 	// Precompute CRT values
 	key.Precompute()
-	
+
 	return key, nil
 }
 
@@ -167,30 +167,30 @@ func (priv *PrivateKey) Precompute() {
 	if priv.Precomputed.Dp != nil {
 		return
 	}
-	
+
 	priv.Precomputed.Dp = new(rand.BigInt).Sub(priv.Primes[0], rand.NewInt(1))
 	priv.Precomputed.Dp.Mod(priv.D, priv.Precomputed.Dp)
-	
+
 	priv.Precomputed.Dq = new(rand.BigInt).Sub(priv.Primes[1], rand.NewInt(1))
 	priv.Precomputed.Dq.Mod(priv.D, priv.Precomputed.Dq)
-	
+
 	priv.Precomputed.Qinv = new(rand.BigInt).ModInverse(priv.Primes[1], priv.Primes[0])
-	
+
 	// Multi-prime precomputation
 	if len(priv.Primes) > 2 {
 		priv.Precomputed.CRTValues = make([]CRTValue, len(priv.Primes)-2)
-		
+
 		r := new(rand.BigInt).Mul(priv.Primes[0], priv.Primes[1])
 		for i := 2; i < len(priv.Primes); i++ {
 			prime := priv.Primes[i]
 			values := &priv.Precomputed.CRTValues[i-2]
-			
+
 			values.Exp = new(rand.BigInt).Sub(prime, rand.NewInt(1))
 			values.Exp.Mod(priv.D, values.Exp)
-			
+
 			values.R = new(rand.BigInt).Set(r)
 			values.Coeff = new(rand.BigInt).ModInverse(r, prime)
-			
+
 			r.Mul(r, prime)
 		}
 	}
@@ -216,7 +216,7 @@ func (priv *PrivateKey) Validate() error {
 			return errors.New("crypto/rsa: primes not in order")
 		}
 	}
-	
+
 	// Check that n = p * q * ...
 	n := new(rand.BigInt).Set(priv.Primes[0])
 	for _, prime := range priv.Primes[1:] {
@@ -225,20 +225,20 @@ func (priv *PrivateKey) Validate() error {
 	if n.Cmp(priv.N) != 0 {
 		return errors.New("crypto/rsa: invalid modulus")
 	}
-	
+
 	// Check that e * d ≡ 1 (mod φ(n))
 	totient := new(rand.BigInt).Sub(priv.Primes[0], rand.NewInt(1))
 	for _, prime := range priv.Primes[1:] {
 		pminus1 := new(rand.BigInt).Sub(prime, rand.NewInt(1))
 		totient.Mul(totient, pminus1)
 	}
-	
+
 	de := new(rand.BigInt).Mul(priv.D, rand.NewInt(int64(priv.E)))
 	de.Mod(de, totient)
 	if de.Cmp(rand.NewInt(1)) != 0 {
 		return errors.New("crypto/rsa: invalid exponents")
 	}
-	
+
 	return nil
 }
 
@@ -253,7 +253,7 @@ func EncryptPKCS1v15(random *rand.Reader, pub *PublicKey, msg []byte) ([]byte, e
 	if len(msg) > k-11 {
 		return nil, ErrDataToLarge
 	}
-	
+
 	// EM = 0x00 || 0x02 || PS || 0x00 || M
 	em := make([]byte, k)
 	em[1] = 2
@@ -264,10 +264,10 @@ func EncryptPKCS1v15(random *rand.Reader, pub *PublicKey, msg []byte) ([]byte, e
 	}
 	em[len(em)-len(msg)-1] = 0
 	copy(mm, msg)
-	
+
 	m := new(rand.BigInt).SetBytes(em)
 	c := encrypt(new(rand.BigInt), pub, m)
-	
+
 	out := make([]byte, k)
 	copyWithLeftPad(out, c.Bytes())
 	return out, nil
@@ -278,28 +278,28 @@ func DecryptPKCS1v15(random *rand.Reader, priv *PrivateKey, ciphertext []byte) (
 	if len(ciphertext) != priv.Size() {
 		return nil, ErrDecryption
 	}
-	
+
 	c := new(rand.BigInt).SetBytes(ciphertext)
 	m := decrypt(random, priv, c)
 	if m == nil {
 		return nil, ErrDecryption
 	}
-	
+
 	em := leftPad(m.Bytes(), priv.Size())
-	
+
 	// EM = 0x00 || 0x02 || PS || 0x00 || M
 	if len(em) != priv.Size() {
 		return nil, ErrDecryption
 	}
-	
+
 	if em[0] != 0 {
 		return nil, ErrDecryption
 	}
-	
+
 	if em[1] != 2 {
 		return nil, ErrDecryption
 	}
-	
+
 	// Look for 0x00 separator
 	var index int
 	for index = 2; index < len(em); index++ {
@@ -307,11 +307,11 @@ func DecryptPKCS1v15(random *rand.Reader, priv *PrivateKey, ciphertext []byte) (
 			break
 		}
 	}
-	
+
 	if index == len(em) || index < 10 {
 		return nil, ErrDecryption
 	}
-	
+
 	return em[index+1:], nil
 }
 
@@ -327,21 +327,21 @@ func decrypt(random *rand.Reader, priv *PrivateKey, c *rand.BigInt) *rand.BigInt
 	if c.Cmp(priv.N) >= 0 {
 		return nil
 	}
-	
+
 	if priv.Precomputed.Dp == nil {
 		priv.Precompute()
 	}
-	
+
 	// Use Chinese Remainder Theorem for faster decryption
 	p := priv.Primes[0]
 	q := priv.Primes[1]
-	
+
 	// m1 = c^dp mod p
 	m1 := new(rand.BigInt).Exp(c, priv.Precomputed.Dp, p)
-	
-	// m2 = c^dq mod q  
+
+	// m2 = c^dq mod q
 	m2 := new(rand.BigInt).Exp(c, priv.Precomputed.Dq, q)
-	
+
 	// h = qinv * (m1 - m2) mod p
 	h := new(rand.BigInt).Sub(m1, m2)
 	if h.Sign() < 0 {
@@ -349,11 +349,11 @@ func decrypt(random *rand.Reader, priv *PrivateKey, c *rand.BigInt) *rand.BigInt
 	}
 	h.Mul(h, priv.Precomputed.Qinv)
 	h.Mod(h, p)
-	
+
 	// m = m2 + h * q
 	m := new(rand.BigInt).Mul(h, q)
 	m.Add(m, m2)
-	
+
 	// Handle multi-prime case
 	if len(priv.Primes) > 2 {
 		for i, values := range priv.Precomputed.CRTValues {
@@ -369,7 +369,7 @@ func decrypt(random *rand.Reader, priv *PrivateKey, c *rand.BigInt) *rand.BigInt
 			m.Add(m, tmp)
 		}
 	}
-	
+
 	return m
 }
 
@@ -379,16 +379,16 @@ func nonZeroRandomBytes(s []byte, random *rand.Reader) error {
 	if err != nil {
 		return err
 	}
-	
+
 	for i := 0; i < len(s); i++ {
 		for s[i] == 0 {
-			_, err = random.Read(s[i:i+1])
+			_, err = random.Read(s[i : i+1])
 			if err != nil {
 				return err
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -400,7 +400,7 @@ func leftPad(input []byte, size int) []byte {
 	if n > size {
 		return input[n-size:]
 	}
-	
+
 	t := make([]byte, size)
 	copy(t[size-n:], input)
 	return t
@@ -412,4 +412,86 @@ func copyWithLeftPad(dest, src []byte) {
 		dest[i] = 0
 	}
 	copy(dest[numPaddingBytes:], src)
+}
+
+var sha256DigestInfoPrefix = []byte{
+	0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+	0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+	0x00, 0x04, 0x20,
+}
+
+// SignPKCS1v15 signs a SHA-256 digest using RSA PKCS#1 v1.5 padding.
+func SignPKCS1v15(priv *PrivateKey, digest []byte) ([]byte, error) {
+	if len(digest) != 32 {
+		return nil, errors.New("crypto/rsa: invalid SHA-256 digest length")
+	}
+
+	k := priv.Size()
+	tLen := len(sha256DigestInfoPrefix) + len(digest)
+	if k < tLen+11 {
+		return nil, ErrDataToLarge
+	}
+
+	em := make([]byte, k)
+	em[1] = 1
+	for i := 2; i < k-tLen-1; i++ {
+		em[i] = 0xff
+	}
+	em[k-tLen-1] = 0
+	copy(em[k-tLen:], sha256DigestInfoPrefix)
+	copy(em[k-len(digest):], digest)
+
+	m := new(rand.BigInt).SetBytes(em)
+	s := decrypt(nil, priv, m)
+	if s == nil {
+		return nil, ErrVerification
+	}
+
+	out := make([]byte, k)
+	copyWithLeftPad(out, s.Bytes())
+	return out, nil
+}
+
+// VerifyPKCS1v15 verifies an RSA PKCS#1 v1.5 signature over a SHA-256 digest.
+func VerifyPKCS1v15(pub *PublicKey, digest, signature []byte) error {
+	if len(digest) != 32 {
+		return errors.New("crypto/rsa: invalid SHA-256 digest length")
+	}
+	if len(signature) != pub.Size() {
+		return ErrVerification
+	}
+
+	s := new(rand.BigInt).SetBytes(signature)
+	if s.Cmp(pub.N) >= 0 {
+		return ErrVerification
+	}
+	emBig := encrypt(new(rand.BigInt), pub, s)
+	em := leftPad(emBig.Bytes(), pub.Size())
+
+	k := pub.Size()
+	tLen := len(sha256DigestInfoPrefix) + len(digest)
+	if k < tLen+11 || em[0] != 0 || em[1] != 1 {
+		return ErrVerification
+	}
+
+	sep := k - tLen - 1
+	for i := 2; i < sep; i++ {
+		if em[i] != 0xff {
+			return ErrVerification
+		}
+	}
+	if em[sep] != 0 {
+		return ErrVerification
+	}
+	for i, b := range sha256DigestInfoPrefix {
+		if em[sep+1+i] != b {
+			return ErrVerification
+		}
+	}
+	for i, b := range digest {
+		if em[k-len(digest)+i] != b {
+			return ErrVerification
+		}
+	}
+	return nil
 }

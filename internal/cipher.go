@@ -97,10 +97,12 @@ func NewCBCEncrypter(b Block, iv []byte) BlockMode {
 	if len(iv) != b.BlockSize() {
 		panic("cipher: IV length must equal block size")
 	}
+	ivCopy := make([]byte, len(iv))
+	copy(ivCopy, iv)
 	return &cbcEncrypter{
 		b:         b,
 		blockSize: b.BlockSize(),
-		iv:        make([]byte, len(iv)),
+		iv:        ivCopy,
 	}
 }
 
@@ -109,10 +111,12 @@ func NewCBCDecrypter(b Block, iv []byte) BlockMode {
 	if len(iv) != b.BlockSize() {
 		panic("cipher: IV length must equal block size")
 	}
+	ivCopy := make([]byte, len(iv))
+	copy(ivCopy, iv)
 	return &cbcDecrypter{
 		b:         b,
 		blockSize: b.BlockSize(),
-		iv:        make([]byte, len(iv)),
+		iv:        ivCopy,
 	}
 }
 

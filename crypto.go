@@ -18,10 +18,10 @@ import (
 type Cipher interface {
 	// Encrypt encrypts plaintext and returns ciphertext
 	Encrypt(plaintext []byte) ([]byte, error)
-	
+
 	// Decrypt decrypts ciphertext and returns plaintext
 	Decrypt(ciphertext []byte) ([]byte, error)
-	
+
 	// BlockSize returns the cipher's block size
 	BlockSize() int
 }
@@ -30,13 +30,13 @@ type Cipher interface {
 type Hash interface {
 	// Write adds data to the hash
 	Write(data []byte) (int, error)
-	
+
 	// Sum returns the hash sum
 	Sum(b []byte) []byte
-	
+
 	// Reset resets the hash to its initial state
 	Reset()
-	
+
 	// Size returns the hash size in bytes
 	Size() int
 }
@@ -88,18 +88,18 @@ func NewAESCipher(key []byte) (*AESCipher, error) {
 	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
 		return nil, errors.New("invalid key size: must be 16, 24, or 32 bytes")
 	}
-	
+
 	cipher, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, errors.New("failed to create AES cipher")
 	}
-	
+
 	// Generate random IV
 	iv := make([]byte, aes.BlockSize)
 	if _, err := rand.Read(iv); err != nil {
 		return nil, errors.New("failed to generate IV")
 	}
-	
+
 	return &AESCipher{
 		cipher: cipher,
 		key:    key,
@@ -112,16 +112,16 @@ func NewAESCipherWithIV(key, iv []byte) (*AESCipher, error) {
 	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
 		return nil, errors.New("invalid key size: must be 16, 24, or 32 bytes")
 	}
-	
+
 	if len(iv) != aes.BlockSize {
 		return nil, errors.New("invalid IV size")
 	}
-	
+
 	cipher, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, errors.New("failed to create AES cipher")
 	}
-	
+
 	return &AESCipher{
 		cipher: cipher,
 		key:    key,
@@ -131,12 +131,12 @@ func NewAESCipherWithIV(key, iv []byte) (*AESCipher, error) {
 
 // Encrypt encrypts plaintext using AES-CBC mode
 func (c *AESCipher) Encrypt(plaintext []byte) ([]byte, error) {
-	return evp.EncryptAES256CBC(c.key, c.iv, plaintext)
+	return evp.EncryptAESCBC(c.key, c.iv, plaintext)
 }
 
 // Decrypt decrypts ciphertext using AES-CBC mode
 func (c *AESCipher) Decrypt(ciphertext []byte) ([]byte, error) {
-	return evp.DecryptAES256CBC(c.key, c.iv, ciphertext)
+	return evp.DecryptAESCBC(c.key, c.iv, ciphertext)
 }
 
 // BlockSize returns the AES block size
@@ -197,7 +197,7 @@ func GenerateRSAKeyPair(bits int) (*PrivateKey, *PublicKey, error) {
 	if err != nil {
 		return nil, nil, errors.New("failed to generate RSA key")
 	}
-	
+
 	return &PrivateKey{privKey}, &PublicKey{&privKey.PublicKey}, nil
 }
 
@@ -213,33 +213,20 @@ func (priv *PrivateKey) Decrypt(ciphertext []byte) ([]byte, error) {
 
 // Sign signs data using RSA
 func (priv *PrivateKey) Sign(data []byte) ([]byte, error) {
-	// Simple implementation: just hash the data and return it as "signature"
-	// This is a placeholder implementation for testing purposes
 	hash := SHA256Sum(data)
-	
-	// For a simple test implementation, we'll just encrypt the hash
-	// In a real implementation, this would use proper RSA signing with PKCS#1 v1.5 or PSS
-	return rsa.EncryptPKCS1v15(rand.GlobalReader, &priv.PublicKey, hash[:16]) // Use first 16 bytes to fit
+	return rsa.SignPKCS1v15(priv.PrivateKey, hash)
 }
 
 // Verify verifies a signature using RSA
 func (pub *PublicKey) Verify(data, signature []byte) error {
-	// Simple implementation for testing: check if data matches expected message
-	// This is a placeholder implementation that simulates signature verification
-	// In a real implementation, this would use proper RSA signature verification
-	
-	// For testing purposes, we'll consider verification to fail if the message is "Wrong message"
-	if string(data) == "Wrong message" {
-		return errors.New("signature verification failed")
-	}
-	
-	return nil
+	hash := SHA256Sum(data)
+	return rsa.VerifyPKCS1v15(pub.PublicKey, hash, signature)
 }
 
 // NewKeyManager creates a new key manager
 func NewKeyManager() (*KeyManager, error) {
 	ks := keystore.NewKeyStore()
-	
+
 	return &KeyManager{
 		keystore: ks,
 	}, nil
@@ -266,11 +253,11 @@ func (km *KeyManager) GetAESCipher(keyID string) (*AESCipher, error) {
 	if err != nil {
 		return nil, errors.New("failed to get key")
 	}
-	
+
 	if key.Type != keystore.KeyTypeAES {
 		return nil, errors.New("key is not an AES key")
 	}
-	
+
 	return NewAESCipher(key.KeyData)
 }
 
@@ -280,18 +267,18 @@ func (km *KeyManager) GetRSAPrivateKey(keyID string) (*PrivateKey, error) {
 	if err != nil {
 		return nil, errors.New("failed to get key")
 	}
-	
+
 	if key.Type != keystore.KeyTypeRSA {
 		return nil, errors.New("key is not an RSA key")
 	}
-	
+
 	// For testing purposes, generate a new RSA key
 	// In a real implementation, you'd deserialize the stored key data
 	rsaKey, err := rsa.GenerateKey(rand.GlobalReader, 1024)
 	if err != nil {
 		return nil, errors.New("failed to generate RSA key")
 	}
-	
+
 	return &PrivateKey{rsaKey}, nil
 }
 
@@ -301,11 +288,11 @@ func (km *KeyManager) GetHMACKey(keyID string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("failed to get key")
 	}
-	
+
 	if key.Type != keystore.KeyTypeHMAC {
 		return nil, errors.New("key is not an HMAC key")
 	}
-	
+
 	return key.KeyData, nil
 }
 
@@ -321,12 +308,8 @@ func (km *KeyManager) DeleteKey(keyID string) error {
 
 // HMAC computes HMAC-SHA256 of data using the given key
 func HMAC(key, data []byte) []byte {
-	// For now, we'll implement a simple HMAC using our SHA-256
-	// In a real implementation, you'd use the proper HMAC package
-	h := sha.New()
-	h.Write(key)
-	h.Write(data)
-	return h.Sum(nil)
+	mac, _ := evp.HMACSHA256(key, data)
+	return mac
 }
 
 // HMACWithKeyID computes HMAC-SHA256 using a stored key
@@ -335,7 +318,7 @@ func (km *KeyManager) HMACWithKeyID(keyID string, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return HMAC(key, data), nil
 }
 
@@ -354,7 +337,7 @@ func GenerateEdDSAKeyPair() (*EdDSAPrivateKey, *EdDSAPublicKey, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	return &EdDSAPrivateKey{priv}, &EdDSAPublicKey{pub}, nil
 }
 
@@ -364,7 +347,7 @@ func (priv *EdDSAPrivateKey) SignEdDSA(message []byte) (*EdDSASignature, error) 
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &EdDSASignature{sig}, nil
 }
 
@@ -374,7 +357,7 @@ func (priv *EdDSAPrivateKey) SignEdDSAMessage(message string) (*EdDSASignature, 
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &EdDSASignature{sig}, nil
 }
 
